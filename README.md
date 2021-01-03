@@ -1,4 +1,6 @@
 # Microlite
+[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](https://github.com/pre-commit/pre-commit)
+
 a micro sqlite ORM
 
 # Purpose
@@ -25,13 +27,11 @@ To start out, lets set down the base assumptions:
 
 # pre-release tasks
 * pre-commit hook
-  * black + isort
   * coverage / badges?
-  
-* flesh out tests
 * add documentation / typing
 * follow instructions https://docs.python.org/3/distutils/sourcedist.html
   * or https://setuptools.readthedocs.io/en/latest/setuptools.html
+  * or poetry?
 
 # design
 Every Model subclass represents a table (unless its name begins with '_' in which case it is considered abstract).

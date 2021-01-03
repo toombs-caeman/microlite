@@ -94,7 +94,7 @@ def initialize_database(
             )
 
         # migrate database
-        extant_tables = dict(sqlite_master(type="table")["name", "sql"].all())
+        extant_tables = dict(sqlite_master(type="table")["name", "sql"])
         migrations = {}
         for name, model in all_models.items():
             create_stmt = repr(model)
@@ -325,7 +325,7 @@ class _model_meta(type):
 class Model(metaclass=_model_meta):
     id = Field(int, primary_key=True, not_null=True)
     row = ModelRow
-    _connect = lambda s: None  # placeholder
+    _connect = lambda s=None: None  # placeholder
 
     def __init__(self, *fields, **filters):
         self._fields = fields
@@ -334,7 +334,7 @@ class Model(metaclass=_model_meta):
     def __getitem__(self, item):
         if not isinstance(item, tuple):
             item = (item,)
-        return type(self)(*self._fields, *item, **self._filters)
+        return type(self)(*self._fields, *map(str, item), **self._filters)
 
     def __call__(self, **filters):
         return type(self)(*self._fields, **self._filters, **filters)
@@ -353,7 +353,7 @@ class Model(metaclass=_model_meta):
             )
         )
         for k, v in sorted(params.items(), reverse=True):  # replace longest keys first
-            query = query.replace(f":{k}", v)
+            query = query.replace(f":{k}", repr(v))
         return query
 
     def _execute(self, query):
@@ -400,7 +400,7 @@ class Model(metaclass=_model_meta):
 
     @property
     def _select(self):
-        return f"SELECT {', '.join(map(str, type(self))) or '*'} FROM {type(self)} WHERE {self._where}"
+        return f"SELECT {', '.join(map(str, self._fields)) or '*'} FROM {type(self)} WHERE {self._where}"
 
     def all(self):
         return list(self)
@@ -421,13 +421,14 @@ class Model(metaclass=_model_meta):
     def delete(self, **filters):
         if filters:
             self = self(**filters)
-        return self._execute(f"DELETE FROM {type(self)} WHERE {self._where}")
+        return self._execute(f"DELETE FROM {type(self)} WHERE {self._where}").rowcount
 
-    def update(self, **filters):
-        if filters:
-            self = self(**filters)
-        fields = ", ".join(f"{f}=:{f}" for f in self._filters if "__" not in f)
-        return self._execute(f"UPDATE {type(self)} SET {fields} WHERE {self._where}")
+    def update(self, **fields):
+        where = self._where
+        if fields:
+            self = self(**fields)
+        fields = "".join(f"{f}=:{f}" for f in fields)
+        return self._execute(f"UPDATE {type(self)} SET {fields} WHERE {where}").rowcount
 
     def create(self, **filters):
         # ignore fields with lookups

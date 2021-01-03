@@ -1,6 +1,6 @@
 repos:
   - repo: https://github.com/psf/black
-    rev: 20.8b1 # Replace by any tag/version: https://github.com/psf/black/tags
+    rev: 20.8b1
     hooks:
       - id: black
         language_version: python3
@@ -9,3 +9,16 @@ repos:
     hooks:
       - id: isort
         args: ["--profile", "black", "--filter-files"]
+  - repo: local
+    hooks:
+      - id: pytest
+        name: Tests and Coverage
+        entry: pytest
+        language: system
+        pass_filenames: false
+        args: [
+            '--cov=microlite.microlite',
+            '--cov-fail-under=90',
+            '--cov-report=html',
+            'tests.py',
+        ]

@@ -1,5 +1,5 @@
-#!/usr/bin/env python3
-from microlite import *
+#!/usr/bin/env pytest
+from .microlite import *
 
 
 class LibTest(TestCase):
@@ -37,6 +37,7 @@ class LibTest(TestCase):
             repr(self.artist),
         )
         connect = self.initDatabase()
+        # test default values
         omaewa = (
             connect()
             .execute("insert into artist(last_name) values ('Ni')")
@@ -45,15 +46,43 @@ class LibTest(TestCase):
         )
         self.assertEqual("NA", omaewa.first_name, msg="moushindeiru")
 
-    def test_select(self):
+        #
+        self.assertEqual(
+            "SELECT * FROM artist WHERE birthday = '1000-01-01'",
+            repr(self.artist(birthday=self.artist.birthday.default)),
+        )
+
+    def test_query(self):
         first_name = "Mario"
         last_name = "Peach"
+        other_name = "other"
         self.initDatabase()
         self.artist.row(first_name, last_name).save()
+        other = self.artist.row(other_name, other_name).save()
+
+        # select
         self.assertEqual(
             list(self.artist.get(id=1)),
             [first_name, last_name, sqlite3.Date(year=1000, month=1, day=1), 1],
         )
+
+        # update
+        new_birthday = sqlite3.Date(2020, 1, 1)
+        self.assertEqual(
+            1, self.artist(first_name=first_name).update(birthday=new_birthday)
+        )
+
+        self.assertEqual(
+            list(self.artist.get(id=1)),
+            [first_name, last_name, new_birthday, 1],
+        )
+        self.assertNotEqual(
+            self.artist.get(first_name=other_name).birthday, new_birthday
+        )
+
+        # delete
+        self.assertEqual(1, self.artist.delete(last_name=last_name))
+        self.assertEqual(self.artist.all(), [other])
 
     def test_row(self):
         self.initDatabase()
@@ -84,7 +113,7 @@ class LibTest(TestCase):
     def test_foreign_key(self):
         db = self.initDatabase()
         artist = self.artist.row("Doja", "Cat").save()
-        album = self.album.row(artist, "Hot Pink").save()
+        album = self.album.row(artist.id, "Hot Pink").save()
         self.assertEqual(album.artist.id, artist.id)
         self.assertEqual(album.artist.first_name, "Doja")
 
@@ -108,28 +137,50 @@ class LibTest(TestCase):
         )
         # TODO test get_or_create default handling
 
-    @unittest.skip(NotImplemented)
+    @unittest.skip("Not implemented")
     def test_dirty_check(self):
-        # track if the row is dirty, and do a recursive save over foreign keys
+        # TODO track if the row is dirty, and do a recursive save over foreign keys
         pass
 
-    @unittest.skip(NotImplemented)
-    def test_slice(self):
-        """
-        slicing a query:
-        * int -> offset n
-        * slice -> limit stop - start offset start (disallow step)
-        """
-        pass
+    def test_init(self):
+        import gc
 
-    @unittest.skip(NotImplemented)
-    def test_migrations(self):
-        """
-        show that migrations:
-        * only run when allow_migrations=True
-        * preserve as much data as they can
-        * fail and roll back on foreign key constraint failure
-        """
+        class X(Model):
+            original_field = Field(int)
+
+        self.initDatabase()
+        saved_id = X.row().save().id
+        self.assertEqual(
+            ["original_field", "id"],
+            list(map(str, X._fields)),
+        )
+
+        class X(Model):
+            new_field = Field(int)
+
+        with self.assertRaises(
+            ImportError, msg="Should not tolerate duplicate model definitions."
+        ):
+            self.initDatabase()
+
+        gc.collect()  # clean up the first X, which has no referees now
+
+        with self.assertRaises(
+            EnvironmentError,
+            msg="Should not allow migrations if allow_migrations=False",
+        ):
+            self.initDatabase()
+
+        initialize_database(self.db, True, allow_migrations=True)
+        self.assertEqual(
+            ["new_field", "id"],
+            list(map(str, X._fields)),
+        )
+
+        # this row should have been copied over when the table was migrated
+        X.get(id=saved_id)
+
+        # TODO show that migrations fail and roll back on foreign key constraint failure
 
 
 if __name__ == "__main__":
