@@ -13,6 +13,10 @@ class LibTest(TestCase):
             first_name = last_name = Field(str, "NA")
             birthday = Field(sqlite3.Date, sqlite3.Date(1000, 1, 1), not_null=True)
 
+            @property
+            def full_name(self):
+                return f"{self.first_name} {self.last_name}"
+
         class Album(Model):
             artist = Field(Artist, not_null=True)
             title = Field(str, not_null=True)
@@ -87,6 +91,7 @@ class LibTest(TestCase):
     def test_row(self):
         self.initDatabase()
         r = self.artist.row("Mike", "Goldblum")
+        self.assertEqual("Mike Goldblum", r.full_name)
 
         # insert
         self.assertEqual(r.id, None)
@@ -141,6 +146,29 @@ class LibTest(TestCase):
     def test_dirty_check(self):
         # TODO track if the row is dirty, and do a recursive save over foreign keys
         pass
+
+    def test_custom_type(self):
+        class newType(Type):
+            def __init__(self, value):
+                self.value = value
+
+            @classmethod
+            def from_sql(cls, b):
+                return cls(b.decode("utf-8"))
+
+            def to_sql(self):
+                return str(self.value)
+
+        class Newt(Model):
+            field = Field(newType)
+
+        self.initDatabase()
+        val = "Eye"
+        Newt.row(newType(val)).save()
+        self.assertEqual(
+            val,
+            Newt.first().field.value,
+        )
 
     def test_init(self):
         import gc

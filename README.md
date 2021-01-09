@@ -26,12 +26,11 @@ To start out, lets set down the base assumptions:
 
 
 # pre-release tasks
-* pre-commit hook
-  * coverage / badges?
 * add documentation / typing
 * follow instructions https://docs.python.org/3/distutils/sourcedist.html
   * or https://setuptools.readthedocs.io/en/latest/setuptools.html
   * or poetry?
+* badges?
 
 # design
 Every Model subclass represents a table (unless its name begins with '_' in which case it is considered abstract).
