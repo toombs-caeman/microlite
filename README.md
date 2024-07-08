@@ -22,6 +22,7 @@ To start out, lets set down the base assumptions:
 * fix up default value handling. I'm inclined to handle it entirely python side
   since sqlite3's converter/adapter handling is atrocious.
 * wrap/fix up converter/adapter/TYPES handling
+    * the default type conversion is now deprecated
 * try to make it thread-safe by handling connections correctly
 
 

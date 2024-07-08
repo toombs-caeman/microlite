@@ -1,8 +1,7 @@
 import abc
 import logging
+import datetime
 import sqlite3
-import unittest
-from typing import Union
 
 assert sqlite3.sqlite_version_info >= (
     3,
@@ -73,24 +72,6 @@ def initialize_database(
         subs = {*cls.__subclasses__()}
         return subs.union({c for s in subs for c in all_subclasses(s)})
 
-    # register types
-    all_types = {}
-    duplicate_types = {}
-    for type_ in all_subclasses(Type):
-        name = type_.__name__.upper()
-        if name in all_types:
-            duplicate_types.setdefault(name, []).append(type_.__module__)
-        all_types[name] = type_
-        sqlite3.register_converter(name, type_.from_sql)
-        sqlite3.register_adapter(type_, type_.to_sql)
-    if duplicate_types:
-        raise ImportError(
-            "Duplicate database field type found:\n"
-            + "\n".join(
-                f"{name:>16} in {info}" for name, info in duplicate_types.items()
-            )
-        )
-
     with connect() as conn:
         # register models
         all_models = {}
@@ -118,6 +99,7 @@ def initialize_database(
         for name, model in all_models.items():
             create_stmt = repr(model)
             if name not in extant_tables:
+                #print(create_stmt, model._defaults)
                 conn.execute(create_stmt)
             elif create_stmt == extant_tables[name]:
                 log.debug(f"table {name} ok")
@@ -161,40 +143,12 @@ def clean_dict(d):
     return {k: v["id"] if isinstance(v, _query.row) else v for k, v in d.items()}
 
 
-class Type(abc.ABC):
-    """A Marker type"""
-
-    @classmethod
-    @abc.abstractmethod
-    def from_sql(cls, byte) -> "Type":
-        raise NotImplemented
-
-    @abc.abstractmethod
-    def to_sql(self) -> Union[int, float, str, bytes]:
-        raise NotImplemented
-
-
-class Type(dict):
-    def register(self, type, name, converter, adapter):
-        """
-        Register a new type so that it can be stored in the database
-
-        :param type: a type object
-        :param name: the sql-side name of this type
-        :param converter: function (bytes) -> object
-        :param adapter: function (object) -> int, float, str, or bytes
-        """
-        # track registered types and provide a way to register more
-        # converter(bytes) -> obj  and  adapter(obj) ->
-        self[type] = name
-        sqlite3.register_converter(name, converter)
-        sqlite3.register_adapter(type, adapter)
 
 
 class Field:
     def __init__(
         self,
-        type,
+        type:type,
         default=None,
         primary_key=False,
         not_null=False,
@@ -204,17 +158,15 @@ class Field:
         stored=False,
         name="",
     ):
-        self.__dict__.update(
-            name=name,
-            type=type,
-            on_delete=on_delete,
-            on_update=on_update,
-            default=default,
-            primary_key=primary_key,
-            not_null=not_null,
-            generate=generate,
-            stored=stored,
-        )
+        self.name = name
+        self.type = type
+        self.on_delete = on_delete
+        self.on_update = on_update
+        self.default = default
+        self.primary_key = primary_key
+        self.not_null = not_null
+        self.generate = generate
+        self.stored = stored
 
     def __str__(self):
         return self.name
@@ -223,35 +175,29 @@ class Field:
         typename = (
             f"INTEGER REFERENCES {self.type}"
             if issubclass(self.type, Model)
-            else self.type.__name__.upper()
-            if issubclass(self.type, Type)
             else {
                 type(None): "NULL",
                 int: "INTEGER",
                 float: "REAL",
                 str: "TEXT",
                 bytes: "BLOB",
-                sqlite3.Date: "DATE",
-                sqlite3.Timestamp: "TIMESTAMP",
-            }.get(self.type, "BLOB")
+            }.get(self.type, self.type.__name__)
         )
+        default = sqlite3.adapters.get((type(self.default), sqlite3.PrepareProtocol), lambda x:x)(self.default)
+
         return " ".join(
             value
-            for condition, value in zip(
-                self.__dict__.values(),
-                (
-                    self.name,
-                    typename,
-                    f"ON DELETE {self.on_delete}",
-                    f"ON UPDATE {self.on_update}",
-                    # run any adapters, but not any converters. should be 'safe'
-                    f"DEFAULT ({sqlite3.connect(':memory:').execute('select ?', (self.default,)).fetchone()[0]!r})",
-                    "PRIMARY KEY",
-                    "NOT NULL",
-                    f"AS {self.generate}",
-                    "STORED",
-                ),
-            )
+            for condition, value in [
+                    (True, self.name),
+                    (True, typename),
+                    (self.on_delete,f"ON DELETE {self.on_delete}"),
+                    (self.on_update,f"ON UPDATE {self.on_update}"),
+                    (self.default is not None,f"DEFAULT ({default!r})"),
+                    (self.primary_key,"PRIMARY KEY"),
+                    (self.not_null,"NOT NULL"),
+                    (self.generate,f"AS {self.generate}"),
+                    (self.stored,"STORED"),
+                     ]
             if condition
         )
 
@@ -314,6 +260,7 @@ class _query:
 
     def __iter__(self):
         return self._execute(self._select)
+
 
     @_allow_bare
     def count(self):
@@ -479,6 +426,7 @@ class _model_meta(type):
         query_dict["_fields"] = tuple(
             (v for v in query_dict.values() if isinstance(v, Field))
         )
+        #query_dict["_defaults"] = tuple(f.default for f in query_dict["_fields"] if f.default is not None)
 
         query = super().__new__(mcs, table_name, query_bases, query_dict)
         query.row = type(f"{query}_row", (query.row,), {**row_dict, "_model": query})
@@ -519,16 +467,10 @@ class table_info(Model):
             return f"SELECT {', '.join(self._fields) or '*'} FROM pragma_table_info(:table)"
 
 
-class TestCase(unittest.TestCase):
-    db = initialize_database.__defaults__[0]
+def registerType(type, to_sql, from_sql):
+    sqlite3.register_adapter(type, to_sql)
+    sqlite3.register_converter(type.__name__, from_sql)
 
-    def setUp(self):
-        """Drop all tables before each test"""
-        with sqlite3.connect(self.db, uri=True) as conn:
-            for r in conn.execute(
-                "select name from sqlite_master where type='table'"
-            ).fetchall():
-                conn.execute(f"drop table {r[0]}")
-
-    def initDatabase(self):
-        return initialize_database(self.db, debug=True)
+registerType(datetime.date, datetime.date.isoformat, lambda d:datetime.date.fromisoformat(d.decode()))
+registerType(datetime.datetime, datetime.datetime.isoformat, lambda dt:datetime.datetime.fromisoformat(dt.decode()))
+registerType(datetime.timedelta, datetime.timedelta.total_seconds, lambda td:datetime.timedelta(seconds=int(td)))
