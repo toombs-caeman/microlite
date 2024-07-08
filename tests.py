@@ -11,7 +11,7 @@ class TestCase(unittest.TestCase):
 
     def setUp(self):
         """Drop all tables before each test"""
-        gc.collect() # make sure we don't have any old references hanging around to lock the database
+        gc.collect()  # make sure we don't have any old references hanging around to lock the database
         with sqlite3.connect(self.db, uri=True) as conn:
             for r in conn.execute(
                 "select name from sqlite_master where type='table'"
@@ -19,7 +19,9 @@ class TestCase(unittest.TestCase):
                 conn.execute(f"drop table {r[0]}")
 
     def initDatabase(self):
+        m.log.level = logging.DEBUG
         return m.initialize_database(self.db, debug=True)
+
 
 class LibTest(TestCase):
     maxDiff = None
@@ -94,7 +96,6 @@ class LibTest(TestCase):
         self.assertEqual(
             1, self.artist(first_name=first_name).update(birthday=new_birthday)
         )
-
         self.assertEqual(
             list(self.artist.get(id=1)),
             [first_name, last_name, new_birthday, 1],
@@ -103,12 +104,18 @@ class LibTest(TestCase):
             self.artist.get(first_name=other_name).birthday, new_birthday
         )
 
+        # select fields
+        self.assertEqual(
+            [first_name],
+            list(self.artist()["first_name"].get(id=1)),
+        )
+
         # delete
         self.assertEqual(1, self.artist.delete(last_name=last_name))
         self.assertEqual(self.artist.all(), [other])
 
     def test_row(self):
-        self.initDatabase()
+        db = self.initDatabase()
         r = self.artist.row("Mike", "Goldblum")
         self.assertEqual("Mike Goldblum", r.full_name)
 
@@ -127,6 +134,11 @@ class LibTest(TestCase):
         r2 = self.artist.row("Do", "Little")
         r2.save()
         self.assertEqual(r2.id, 2)
+
+        # test filter
+        x = self.artist(last_name="Little").first()
+        print(x)
+        self.assertEqual(r2, x)
 
         # delete
         r2.delete()
@@ -170,8 +182,6 @@ class LibTest(TestCase):
     def test_custom_type(self):
         # TODO make sure that converters and adapters work
         pass
-
-
 
     def test_init(self):
 

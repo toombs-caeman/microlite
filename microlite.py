@@ -46,11 +46,17 @@ def initialize_database(
     allow_migrations=False,
     **options,
 ):
+    """
+    Allow the databse to be used.
+
+    This should be called after all models are defined and before any calls to the database are made.
+    """
+
     options = {
         "database": database,
         "detect_types": sqlite3.PARSE_DECLTYPES,
         "uri": True,
-        "factory": Connection,
+        "factory": sqlite3.Connection,
         **options,
     }
 
@@ -99,7 +105,7 @@ def initialize_database(
         for name, model in all_models.items():
             create_stmt = repr(model)
             if name not in extant_tables:
-                #print(create_stmt, model._defaults)
+                # print(create_stmt, model._defaults)
                 conn.execute(create_stmt)
             elif create_stmt == extant_tables[name]:
                 log.debug(f"table {name} ok")
@@ -143,12 +149,10 @@ def clean_dict(d):
     return {k: v["id"] if isinstance(v, _query.row) else v for k, v in d.items()}
 
 
-
-
 class Field:
     def __init__(
         self,
-        type:type,
+        type: type,
         default=None,
         primary_key=False,
         not_null=False,
@@ -183,21 +187,23 @@ class Field:
                 bytes: "BLOB",
             }.get(self.type, self.type.__name__)
         )
-        default = sqlite3.adapters.get((type(self.default), sqlite3.PrepareProtocol), lambda x:x)(self.default)
+        default = sqlite3.adapters.get(
+            (type(self.default), sqlite3.PrepareProtocol), lambda x: x
+        )(self.default)
 
         return " ".join(
             value
             for condition, value in [
-                    (True, self.name),
-                    (True, typename),
-                    (self.on_delete,f"ON DELETE {self.on_delete}"),
-                    (self.on_update,f"ON UPDATE {self.on_update}"),
-                    (self.default is not None,f"DEFAULT ({default!r})"),
-                    (self.primary_key,"PRIMARY KEY"),
-                    (self.not_null,"NOT NULL"),
-                    (self.generate,f"AS {self.generate}"),
-                    (self.stored,"STORED"),
-                     ]
+                (True, self.name),
+                (True, typename),
+                (self.on_delete, f"ON DELETE {self.on_delete}"),
+                (self.on_update, f"ON UPDATE {self.on_update}"),
+                (self.default is not None, f"DEFAULT ({default!r})"),
+                (self.primary_key, "PRIMARY KEY"),
+                (self.not_null, "NOT NULL"),
+                (self.generate, f"AS {self.generate}"),
+                (self.stored, "STORED"),
+            ]
             if condition
         )
 
@@ -218,14 +224,16 @@ class _allow_bare:
         return lambda *fields, **filters: self.__func(
             cls(*fields, **filters)
             if obj is None
-            else cls(*obj._fields, *fields, **obj._filters, **filters)
-            if fields or filters
-            else obj
+            else (
+                cls(*obj._fields, *fields, **obj._filters, **filters)
+                if fields or filters
+                else obj
+            )
         )
 
 
 class _query:
-    def _connect(self=None):
+    def _connect(model=None) -> sqlite3.Connection:
         raise Exception("database not initialized")
 
     def __init__(self, *fields, **filters):
@@ -260,7 +268,6 @@ class _query:
 
     def __iter__(self):
         return self._execute(self._select)
-
 
     @_allow_bare
     def count(self):
@@ -352,11 +359,11 @@ class _query:
             args = list(reversed(args))
             super().__init__(
                 {
-                    field.name: kwargs.pop(field.name)
-                    if field.name in kwargs
-                    else args.pop()
-                    if args
-                    else field.default
+                    field.name: (
+                        kwargs.pop(field.name)
+                        if field.name in kwargs
+                        else args.pop() if args else field.default
+                    )
                     for field in self._model
                 },
             )
@@ -426,7 +433,7 @@ class _model_meta(type):
         query_dict["_fields"] = tuple(
             (v for v in query_dict.values() if isinstance(v, Field))
         )
-        #query_dict["_defaults"] = tuple(f.default for f in query_dict["_fields"] if f.default is not None)
+        # query_dict["_defaults"] = tuple(f.default for f in query_dict["_fields"] if f.default is not None)
 
         query = super().__new__(mcs, table_name, query_bases, query_dict)
         query.row = type(f"{query}_row", (query.row,), {**row_dict, "_model": query})
@@ -471,6 +478,19 @@ def registerType(type, to_sql, from_sql):
     sqlite3.register_adapter(type, to_sql)
     sqlite3.register_converter(type.__name__, from_sql)
 
-registerType(datetime.date, datetime.date.isoformat, lambda d:datetime.date.fromisoformat(d.decode()))
-registerType(datetime.datetime, datetime.datetime.isoformat, lambda dt:datetime.datetime.fromisoformat(dt.decode()))
-registerType(datetime.timedelta, datetime.timedelta.total_seconds, lambda td:datetime.timedelta(seconds=int(td)))
+
+registerType(
+    datetime.date,
+    datetime.date.isoformat,
+    lambda d: datetime.date.fromisoformat(d.decode()),
+)
+registerType(
+    datetime.datetime,
+    datetime.datetime.isoformat,
+    lambda dt: datetime.datetime.fromisoformat(dt.decode()),
+)
+registerType(
+    datetime.timedelta,
+    datetime.timedelta.total_seconds,
+    lambda td: datetime.timedelta(seconds=int(td)),
+)

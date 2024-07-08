@@ -34,7 +34,7 @@ To start out, lets set down the base assumptions:
 * badges?
 
 # design
-Every Model subclass represents a table (unless its name begins with '_' in which case it is considered abstract).
+Every Model subclass represents a table (unless its name begins with _ in which case it is considered abstract).
 That table's fields are determined by Field instances defined on the class.
 A Model instance represents a query into that table.
 Queries return a ModelRow subclass specific to that Model, also available as `Model.row`.
@@ -46,3 +46,7 @@ A ModelRow's fields are available as attributes, along with the methods `save` a
 `__str__` is used similarly to reference a sql object in a query. 
 As such, `str(Model)` returns the table name, while `repr(Model)` returns a create table sql statement.
 They are the same for a query object.
+
+# TODO
+* properly handle safe parameter injection `?` not `{}`
+* `__sql__` not `__repr__`
