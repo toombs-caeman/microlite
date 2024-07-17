@@ -1,8 +1,9 @@
 import gc
-import unittest
 import logging
-import sqlite3
 import datetime
+import unittest
+import pytest
+import sqlite3
 import microlite as m
 
 
@@ -17,211 +18,217 @@ class TestCase(unittest.TestCase):
                 "select name from sqlite_master where type='table'"
             ).fetchall():
                 conn.execute(f"drop table {r[0]}")
+        m.Model.__all__.clear()
 
-    def initDatabase(self):
-        m.log.level = logging.DEBUG
-        return m.initialize_database(self.db, debug=True)
+    def initDB(self, migrate=False):
+        return m.initialize_database(self.db, debug=True, allow_migrations=migrate)
 
+    def fillDB(self):
+        class Collector(m.Model):
+            name = m.Field(str, "NA")
 
-class LibTest(TestCase):
-    maxDiff = None
-
-    @classmethod
-    def setUpClass(cls):
-        logging.basicConfig(level=logging.INFO)
+        self.collector = Collector
 
         class Artist(m.Model):
-            first_name = last_name = m.Field(str, "NA")
-            birthday = m.Field(datetime.date, datetime.date(1000, 1, 1), not_null=True)
+            name = m.Field(str, "NA", notnull=True)
+            birthday = m.Field(datetime.date, datetime.date(1000, 1, 1), notnull=True)
 
-            @property
-            def full_name(self):
-                return f"{self.first_name} {self.last_name}"
+        m.registerType(Artist, lambda m: m.id, lambda b: int(b))
+        self.artist = Artist
 
-        class Album(m.Model):
-            artist = m.Field(Artist, not_null=True)
-            title = m.Field(str, not_null=True)
+        class Painting(m.Model):
+            name = m.Field(str)
+            artist = m.Field(Artist)
+            list_price = m.Field(float)
 
-        cls.artist = Artist
-        cls.album = Album
+            def __str__(self):
+                return f"{self.name!r} by {self.artist} worth {self.list_price}"
 
-    def test_render(self):
+        self.painting = Painting
+
+        class Sale(m.Model):
+            date = m.Field(datetime.date)
+            painting = m.Field(Painting)
+            artist = m.Field(Artist)
+            collector = m.Field(Collector)
+            price = m.Field(float)
+
+        self.sale = Sale
+
+        execute = self.initDB()
+
+        a = Artist(name="Abe").save()
+        a1 = Painting(name="steak", artist=a, list_price=1.0).save()
+
+        b = Artist(name="Betty").save()
+        b1 = Painting(name="boop", artist=b, list_price=1.0).save()
+        b2 = Painting(name="Sailorman", artist=b, list_price=2.0).save()
+
+        c = Collector(name="Carol").save()
+        d = Collector(name="Dan").save()
+
+        Sale(painting=a1, artist=a, collector=c, price=1.0).save()
+        Sale(painting=b1, artist=b, collector=c, price=1.0).save()
+        Sale(painting=b2, artist=b, collector=d, price=1.0).save()
+
+        return execute
+
+    def testRender(self):
         # field
-        self.assertEqual("S", str(m.Field(str, name="S")))
+        f = m.Field(int, 3, notnull=m.conflict.rollback)
+        # __set_name__ is usually called implicitly when the class is defined
+        f.__set_name__("fake_table", "field_name")
         self.assertEqual(
-            "name TEXT DEFAULT (3) NOT NULL",
-            repr(m.Field(str, name="name", default=3, not_null=True)),
+            "field_name INTEGER DEFAULT (3) NOT NULL ON CONFLICT ROLLBACK",
+            f.__create__(),
         )
+        _ = self.fillDB()
         # table
         self.assertEqual(
-            f"CREATE TABLE {self.artist} ("
-            "first_name TEXT DEFAULT ('NA'), "
-            "last_name TEXT DEFAULT ('NA'), "
+            "CREATE TABLE artist (name TEXT DEFAULT ('NA') NOT NULL, "
             "birthday date DEFAULT ('1000-01-01') NOT NULL, "
             "id INTEGER PRIMARY KEY NOT NULL)",
-            repr(self.artist),
+            self.artist.__create__(),
         )
-        connect = self.initDatabase()
-        # test default values
-        omaewa = (
-            connect()
-            .execute("insert into artist(last_name) values ('Ni')")
-            .execute("select * from artist where last_name ='Ni'")
-            .fetchone()
-        )
-        self.assertEqual("NA", omaewa.first_name, msg="moushindeiru")
 
-        #
         self.assertEqual(
-            "SELECT * FROM artist WHERE birthday = '1000-01-01'",
-            repr(self.artist(birthday=self.artist.birthday.default)),
+            "(SELECT * FROM artist WHERE artist.birthday = (?))",
+            m.SQL(self.artist.birthday == datetime.date(2000, 1, 1)),
         )
 
-    def test_query(self):
-        first_name = "Mario"
-        last_name = "Peach"
-        other_name = "other"
-        self.initDatabase()
-        self.artist.row(first_name, last_name).save()
-        other = self.artist.row(other_name, other_name).save()
+    def testQueryGet(self):
+        _ = self.fillDB()
+        self.assertEqual(1, (self.artist.name == "Abe").get().id)
+        self.assertRaises(m.DoesNotExist, (self.artist.name == "A.I.").get)
 
-        # select
+        # insert a new artist and show it can be retrieved
+        n = "Edward"
+        ed = self.artist(name=n).save()
+        self.assertEqual(ed, (self.artist.name == n).get(), msg="query select")
+
+        self.assertEqual(ed, self.artist.get_or_create(name=n))
+
+    def testQueryDeep(self):
+        # specify that a foreign key relationship should be fetched all in a single query
+        _ = self.fillDB()
+        s = self.sale.first()
+        self.assertIsInstance(
+            s.artist,
+            self.artist,
+            msg="by referencing a foreign key we should have fetched the object",
+        )
+
+    def testQueryDelete(self):
+        _ = self.fillDB()
+        a = "Abe"
+        qa = self.artist.name == a
+        self.assertEqual(a, qa.get().name)
+        self.assertEqual(1, qa.delete())
+        self.assertRaises(m.DoesNotExist, qa.get)
+
+    def testQueryOrder(self):
+        _ = self.fillDB()
         self.assertEqual(
-            list(self.artist.get(id=1)),
-            [first_name, last_name, datetime.date(year=1000, month=1, day=1), 1],
+            "(SELECT artist.name FROM artist ORDER BY artist.id)",
+            m.SQL(self.artist.name.sort(self.artist.id)),
         )
 
-        # update
-        new_birthday = datetime.date(2020, 1, 1)
+    @unittest.skip("not done yet")
+    def testJoin(self):
+        self.fail("inner join, outer join, join by foreign key")
+
+    def testQueryDistinct(self):
+        _ = self.fillDB()
+        n = "pete"
+        self.artist(name=n).save()
+        self.artist(name=n).save()
+        self.artist(name=n).save()
+        self.assertEqual(3, len(self.artist.name == n))
         self.assertEqual(
-            1, self.artist(first_name=first_name).update(birthday=new_birthday)
+            "(SELECT DISTINCT artist.name FROM artist)",
+            m.SQL((+self.artist.name)(distinct=True)),
         )
+
+    def testLimit(self):
+        _ = self.fillDB()
         self.assertEqual(
-            list(self.artist.get(id=1)),
-            [first_name, last_name, new_birthday, 1],
-        )
-        self.assertNotEqual(
-            self.artist.get(first_name=other_name).birthday, new_birthday
+            "(SELECT collector.name FROM collector WHERE collector.id IN (SELECT sale.collector FROM sale) LIMIT 5)",
+            m.SQL((self.collector.id & self.sale.collector)[:5](self.collector.name)),
         )
 
-        # select fields
+    @unittest.skip("uncertain about the syntax")
+    def testAgg(self):
+        _ = self.fillDB()
         self.assertEqual(
-            [first_name],
-            list(self.artist()["first_name"].get(id=1)),
-        )
-
-        # delete
-        self.assertEqual(1, self.artist.delete(last_name=last_name))
-        self.assertEqual(self.artist.all(), [other])
-
-    def test_row(self):
-        db = self.initDatabase()
-        r = self.artist.row("Mike", "Goldblum")
-        self.assertEqual("Mike Goldblum", r.full_name)
-
-        # insert
-        self.assertEqual(r.id, None)
-        r.save()
-        self.assertEqual(r.id, 1)
-
-        # update
-        r.first_name = "Jeff"
-        r.save()
-        self.assertEqual(r.id, 1)
-        self.assertEqual(len(self.artist().all()), 1)
-        self.assertEqual(self.artist().first().first_name, "Jeff")
-
-        r2 = self.artist.row("Do", "Little")
-        r2.save()
-        self.assertEqual(r2.id, 2)
-
-        # test filter
-        x = self.artist(last_name="Little").first()
-        print(x)
-        self.assertEqual(r2, x)
-
-        # delete
-        r2.delete()
-        self.assertEqual(r2.id, None)
-        self.assertEqual(len(self.artist().all()), 1)
-        self.assertEqual(self.artist().first().first_name, "Jeff")
-
-    def test_foreign_key(self):
-        db = self.initDatabase()
-        artist = self.artist.row("Doja", "Cat").save()
-        album = self.album.row(artist.id, "Hot Pink").save()
-        self.assertEqual(album.artist.id, artist.id)
-        self.assertEqual(album.artist.first_name, "Doja")
-
-    def test_lookups(self):
-        db = self.initDatabase()
-
-        doja = self.artist.row("Doja", "Cat").save()
-        hot_pink = self.album.row(doja, "Hot Pink").save()
-
-        bd = datetime.date(1995, 10, 21)
-        mushroom = self.artist.row("Infected", "Mushroom", bd).save()
-        nasa = self.album.row(mushroom, "Head of NASA and the two Amish boys").save()
-        shawarma = self.album.row(mushroom, "The Legend of the Black Shawarma").save()
-        self.assertListEqual(
-            [nasa, shawarma],
-            self.album(artist=mushroom).all(),
+            "(SELECT * FROM painting WHERE painting.list_price > (SELECT AVG(painting.list_price) FROM painting))",
+            m.SQL(self.painting.list_price > self.painting.list_price.avg()),
         )
         self.assertEqual(
-            [hot_pink],
-            self.album(artist__birthday__ne=bd).all(),
+            "(SELECT collector.name, (SELECT COUNT(*) FROM sale WHERE collectors.id = sales.collector) FROM collectors)",
+            m.SQL(
+                self.collector.name(
+                    self.sale.count()[self.collector.id == self.sale.collector]
+                )
+            ),
         )
-        # TODO test get_or_create default handling
 
-    @unittest.skip("Not implemented")
-    def test_dirty_check(self):
-        # TODO track if the row is dirty, and do a recursive save over foreign keys
-        pass
+    def testConform(self):
+        """
+        ABCMeta ensures that all subclasses of QueryAPI implement its abstract methods,
+        but the non-abstract methods defer to Query, so Query must override all methods of QueryAPI,
+        not just the abstract methods.
+        """
+        api = (
+            func for func in m.QueryAPI.__dict__ if callable(getattr(m.QueryAPI, func))
+        )
+        impl = tuple(k for k in m.Query.__dict__.keys() if not k.startswith("_Query__"))
+        for f in api:
+            with self.subTest(function=f):
+                self.assertIn(f, impl)
 
-    @unittest.skip("Not implemented")
-    def test_custom_type(self):
-        # TODO make sure that converters and adapters work
-        pass
-
-    def test_init(self):
-
+    def testMigrations(self):
         class X(m.Model):
             original_field = m.Field(int)
 
-        self.initDatabase()
-        saved_id = X.row().save().id
+        self.initDB()
+        saved_id = X(original_field=0).save().id
         self.assertEqual(
-            ["original_field", "id"],
-            list(map(str, X._fields)),
+            ("original_field", "id"),
+            X.__fields__,
         )
 
         class X(m.Model):
             new_field = m.Field(int)
 
         with self.assertRaises(
-            ImportError, msg="Should not tolerate duplicate model definitions."
+            m.MigrationError, msg="Should not tolerate duplicate model definitions."
         ):
-            self.initDatabase()
+            self.initDB()
 
+        m.Model.__all__.clear()
+        m.Model.__all__.add(X)
         gc.collect()  # clean up the first X, which has no referees now
 
         with self.assertRaises(
-            EnvironmentError,
+            m.MigrationError,
             msg="Should not allow migrations if allow_migrations=False",
         ):
-            self.initDatabase()
+            self.initDB()
 
-        m.initialize_database(self.db, True, allow_migrations=True)
+        self.initDB(migrate=True)
         self.assertEqual(
-            ["new_field", "id"],
-            list(map(str, X._fields)),
+            ("new_field", "id"),
+            X.__fields__,
         )
 
         # this row should have been copied over when the table was migrated
-        X.get(id=saved_id)
+        (X.id == saved_id).get()
 
         # TODO show that migrations fail and roll back on foreign key constraint failure
 
 
 if __name__ == "__main__":
-    unittest.main()
+    logging.basicConfig(level=logging.INFO)
+    import pytest
+
+    pytest.main([__file__])

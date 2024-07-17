@@ -9,22 +9,17 @@ Let's answer the question 'How good can we make an ORM in <= 1000 lines?'
 
 To start out, lets set down the base assumptions:
 * use [black](https://pypi.org/project/black/) for formatting.
-* The line count includes blank lines, but not tests.
+* use cloc to count lines (only code counts).
+    * do not include tests in line count
 
 
 # features
+* a numpy like syntax for
+
 * manage database options
     * reasonable defaults for testing in memory
 * enhanced query logging
 * automated migrations
-
-# feature tasks
-* fix up default value handling. I'm inclined to handle it entirely python side
-  since sqlite3's converter/adapter handling is atrocious.
-* wrap/fix up converter/adapter/TYPES handling
-    * the default type conversion is now deprecated
-* try to make it thread-safe by handling connections correctly
-
 
 # pre-release tasks
 * add documentation / typing
