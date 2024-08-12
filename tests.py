@@ -33,7 +33,6 @@ class TestCase(unittest.TestCase):
             name = m.Field(str, "NA", notnull=True)
             birthday = m.Field(datetime.date, datetime.date(1000, 1, 1), notnull=True)
 
-        m.registerType(Artist, lambda m: m.id, lambda b: int(b))
         self.artist = Artist
 
         class Painting(m.Model):
@@ -108,6 +107,26 @@ class TestCase(unittest.TestCase):
 
         self.assertEqual(ed, self.artist.get_or_create(name=n))
 
+    @unittest.skip("not done yet")
+    def testStringFunctions(self):
+        # https://www.sqlitetutorial.net/sqlite-string-functions/
+        # https://www.sqlite.org/lang_corefunc.html
+        self.assertEqual(
+            "(SELECT * FROM artist WHERE SUBSTR(artist.name, 0, 1) = (?)",
+            m.SQL(self.artist.name.startswith("a")),  # select * from artist where
+        )
+
+        # python.[lr]?strip == sqlite.[lr]?trim
+        # lower
+        # upper
+        # python.str.replace(old, new, count) == sqlite.replace(str, old, new)
+        # python.str[start:stop:] == sqlite.substr(str, start, length)
+        # len == length
+        # sep.join(...) == concat_ws(sep, ...)
+        # str.find(sub) == instr(str, sub)
+        #
+        pass
+
     def testQueryDeep(self):
         # specify that a foreign key relationship should be fetched all in a single query
         _ = self.fillDB()
@@ -133,7 +152,7 @@ class TestCase(unittest.TestCase):
             m.SQL(self.artist.name.sort(self.artist.id)),
         )
 
-    @unittest.skip("not done yet")
+    @unittest.skip("uncertain about the syntax")
     def testJoin(self):
         self.fail("inner join, outer join, join by foreign key")
 

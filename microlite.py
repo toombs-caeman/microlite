@@ -10,12 +10,6 @@ from itertools import chain
 log = logging.getLogger(__name__)
 
 """
-select extra clauses
-* sort - order by clause
-* distinct - distinct rows
-* limit - return only a slice of results (use actual slice?)
-* unshallow
-
 
 aggregation
 * count, avg, count(*), sum, min, max, total
@@ -183,7 +177,7 @@ class Query[T](QueryAPI):
                 f[t] = (f[t],)
         self.__flags = f
 
-    def __curry(self, extend=("where", "columns", "order"), **flags):
+    def __curry(self, extend=("where", "columns", "order"), **flags) -> "Query":
         """Used internally to add clauses and return a new Query object."""
         out = self.__flags.copy()
         for k, v in flags.items():
@@ -282,11 +276,13 @@ class Query[T](QueryAPI):
     def __repr__(self):
         return f"Query{self.__sql__()}"
 
-    def __getitem__(self, __o: object) -> "Query":
+    def __getitem__(self, __o: object) -> "Query[T]" | T:
         """Create a new Query with an additional WHERE constraint or a LIMIT clause."""
         match __o:
             case slice():
                 return self.__curry(offset=__o.start, limit=__o.stop)
+            case int():
+                return self.__curry(offset=__o, limit=1).get()
             case tuple():
                 return self.__curry(where=__o)
             case _:
@@ -513,14 +509,25 @@ class Field[T, F](QueryAPI):
     def __default__(self) -> F:
         return self.__default
 
+    ## AGGREGATIONS
+
     def avg(self, by=None):
         return Query(self.__table, columns=Agg("AVG", self, by=by))
 
     def count(self, by=None):
         return Query(self.__table, columns=Agg("COUNT", self, by=by))
 
-    def sort(self, by):
-        return (+self).sort(by)
+    def sum(self, by=None):
+        return Query(self.__table, columns=Agg("SUM", self, by=by))
+
+    def min(self, by=None):
+        return Query(self.__table, columns=Agg("MIN", self, by=by))
+
+    def max(self, by=None):
+        return Query(self.__table, columns=Agg("MAX", self, by=by))
+
+    def total(self, by=None):
+        return Query(self.__table, columns=Agg("TOTAL", self, by=by))
 
 
 class Agg:
@@ -603,23 +610,10 @@ class model_meta(QueryAPI, ABCMeta):
         """This is non-standard for the QueryAPI, but it returns a new object."""
         return ABCMeta.__call__(self, *args, **kwargs)
 
-
-class Model(QueryAPI, Reference, metaclass=model_meta):
-    __all__ = set()
-    __fields__: tuple[str, ...] = ()
-    _connection: Connection = None
-    id = Field(int, primary=True, notnull=True)
-
-    def __init__(self, **kwargs) -> None:
-        for name, value in kwargs.items():
-            setattr(self, name, value)
-
-    @classmethod
     def __create__(cls):
         fields = (getattr(cls, f).__create__() for f in cls.__fields__)
         return f"CREATE TABLE {SQL(cls)} ({', '.join(fields)})"
 
-    @classmethod
     def get_or_create(cls, defaults: dict | None = None, **kwargs):
         if defaults is None:
             defaults = {}
@@ -633,6 +627,17 @@ class Model(QueryAPI, Reference, metaclass=model_meta):
             ).get()
         except ValueError:
             return cls(**defaults).save()
+
+
+class Model(QueryAPI, Reference, metaclass=model_meta):
+    __all__ = set()
+    __fields__: tuple[str, ...] = ()
+    _connection: Connection = None
+    id = Field(int, primary=True, notnull=True)
+
+    def __init__(self, **kwargs) -> None:
+        for name, value in kwargs.items():
+            setattr(self, name, value)
 
     def __init_subclass__(cls):
         Model.__all__.add(cls)
@@ -659,8 +664,6 @@ class Model(QueryAPI, Reference, metaclass=model_meta):
         with self._connection as conn:
             self.id = conn.execute(sql, self.__values).lastrowid
         return self
-        self.id = self._connect.execute(sql, clean_dict(self)).lastrowid or self.id
-        return self
 
     def delete(self):
         if self.id is None:
@@ -686,25 +689,6 @@ class sqlite_master(Model):
     tbl_name = Field(str)
     rootpage = Field(int)
     sql = Field(str)
-
-
-# class table_info(Model):
-#    id = None  # don't include id field
-#    cid = Field(int)
-#    name = type = Field(str)
-#    notnull = Field(int)
-#    dflt_value = Field(bytes)
-#    pk = Field(int)
-#    def __init__(self, table):
-#        self.__table = table
-#
-#    def __sql__(self=None):
-#        if self is None:
-#            return 'table_info'
-#        return f"pragma_table_info(?) as table_info"
-#
-#    def __params__(self):
-#        return (repr(SQL(self.__table)),)
 
 
 def initialize_database(
